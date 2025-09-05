@@ -15,6 +15,7 @@ Dependencies:
 
 import argparse
 import sys
+from typing import Optional
 
 try:
     import requests
@@ -46,7 +47,7 @@ def fetch(url: str, timeout: int = 20) -> requests.Response:
     return resp
 
 
-def extract_text(html: str, selector: str | None = None) -> str:
+def extract_text(html: str, selector: Optional[str] = None) -> str:
     try:
         from bs4 import BeautifulSoup  # type: ignore
     except Exception:
@@ -118,4 +119,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
