@@ -14,6 +14,7 @@ Dependencies:
 """
 
 import argparse
+import re
 import sys
 from typing import Optional
 
@@ -27,7 +28,7 @@ except ImportError:
     sys.exit(2)
 
 
-def fetch(url: str, timeout: int = 20) -> requests.Response:
+def fetch_html(url: str, timeout: int = 20, force_encoding: Optional[str] = None) -> str:
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -38,13 +39,44 @@ def fetch(url: str, timeout: int = 20) -> requests.Response:
     }
     resp = requests.get(url, headers=headers, timeout=timeout)
     resp.raise_for_status()
-    # Improve encoding detection
-    if not resp.encoding:
+
+    raw = resp.content
+
+    # 1) If user forces an encoding, use it
+    if force_encoding:
         try:
-            resp.encoding = resp.apparent_encoding or "utf-8"
+            return raw.decode(force_encoding, errors="strict")
         except Exception:
-            resp.encoding = "utf-8"
-    return resp
+            return raw.decode(force_encoding, errors="replace")
+
+    # 2) Try to detect from HTML meta in the first chunk
+    head = raw[:4096]
+    m = re.search(rb"charset\s*=\s*['\"]?([A-Za-z0-9_\-]+)", head, re.IGNORECASE)
+    meta_enc = m.group(1).decode("ascii", "ignore").lower() if m else None
+
+    # 3) Decide best encoding: prefer meta, else requests' guess, else apparent
+    enc = meta_enc or (resp.encoding.lower() if resp.encoding else None)
+    apparent = None
+    try:
+        apparent = (resp.apparent_encoding or "").lower()
+    except Exception:
+        apparent = None
+
+    # 4) If server says latin-1/iso-8859-1 but apparent/ meta suggests utf-8, prefer that
+    if enc in {"iso-8859-1", "latin-1", "windows-1252", "cp1252"} and apparent:
+        enc = apparent
+
+    if not enc:
+        enc = apparent or "utf-8"
+
+    try:
+        return raw.decode(enc, errors="strict")
+    except Exception:
+        # Last resort: utf-8 with replacement
+        try:
+            return raw.decode("utf-8", errors="replace")
+        except Exception:
+            return raw.decode(errors="replace")
 
 
 def extract_text(html: str, selector: Optional[str] = None) -> str:
@@ -99,19 +131,24 @@ def main() -> int:
         default=20,
         help="Request timeout in seconds (default: 20)",
     )
+    parser.add_argument(
+        "--encoding",
+        type=str,
+        help="Force a specific text encoding (e.g., utf-8)",
+    )
 
     args = parser.parse_args()
 
     try:
-        resp = fetch(args.url, timeout=args.timeout)
+        html = fetch_html(args.url, timeout=args.timeout, force_encoding=args.encoding)
     except requests.exceptions.RequestException as e:
         print(f"Error fetching {args.url}: {e}", file=sys.stderr)
         return 1
 
     if args.raw:
-        print(resp.text)
+        print(html)
     else:
-        content = extract_text(resp.text, selector=args.selector)
+        content = extract_text(html, selector=args.selector)
         print(content)
 
     return 0
